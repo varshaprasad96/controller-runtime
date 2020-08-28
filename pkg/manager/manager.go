@@ -17,6 +17,7 @@ limitations under the License.
 package manager
 
 import (
+	"crypto/tls"
 	"fmt"
 	"net"
 	"net/http"
@@ -201,6 +202,12 @@ type Options struct {
 	// {TempDir}/k8s-webhook-server/serving-certs. The server key and certificate
 	// must be named tls.key and tls.crt, respectively.
 	CertDir string
+
+	// WebhookTLSConfig is a *tls.Config object that will be used in place of
+	// the one normally created by reading certs in the CertDir.  If both
+	// CertDir and this are specified CertDir will be ignored
+	WebhookTLSConfig *tls.Config
+
 	// Functions to all for a user to customize the values that will be injected.
 
 	// NewCache is the function that will create the cache to be used
@@ -360,6 +367,7 @@ func New(config *rest.Config, options Options) (Manager, error) {
 		port:                    options.Port,
 		host:                    options.Host,
 		certDir:                 options.CertDir,
+		webhookTLSConfig:        options.WebhookTLSConfig,
 		leaseDuration:           *options.LeaseDuration,
 		renewDeadline:           *options.RenewDeadline,
 		retryPeriod:             *options.RetryPeriod,

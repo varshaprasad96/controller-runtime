@@ -262,7 +262,12 @@ func (te *Environment) Start() (*rest.Config, error) {
 	te.CRDs = crds
 
 	log.V(1).Info("installing webhooks")
-	err = te.WebhookInstallOptions.Install(te.Config)
+	// err = te.WebhookInstallOptions.Install(te.Config)
+	if te.WebhookInstallOptions.CustomTLSConfig != nil {
+		err = te.WebhookInstallOptions.InstallWithCustomTLS(te.Config)
+	} else {
+		err = te.WebhookInstallOptions.Install(te.Config)
+	}
 
 	return te.Config, err
 }
