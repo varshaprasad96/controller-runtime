@@ -41,6 +41,27 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/source"
 )
 
+type SingnallingSourceWrapper struct {
+	cacheSyncDone chan struct{}
+	source.SyncingSource
+}
+
+func NewSignallingSource(cacheChannel chan struct{}, src source.SyncingSource) source.SyncingSource {
+	return &SingnallingSourceWrapper{cacheSyncDone: cacheChannel, SyncingSource: src}
+}
+
+func (s *SingnallingSourceWrapper) WaitForSync(ctx context.Context) error {
+	defer func() {
+		close(s.cacheSyncDone)
+	}()
+	return s.SyncingSource.WaitForSync(ctx)
+}
+
+func (s *SingnallingSourceWrapper) Start(ctx context.Context, handler handler.EventHandler, queue workqueue.RateLimitingInterface,
+	prct ...predicate.Predicate) error {
+	return s.SyncingSource.Start(ctx, handler, queue, prct...)
+}
+
 var _ = Describe("controller", func() {
 	var fakeReconcile *fakeReconciler
 	var ctrl *Controller
@@ -142,37 +163,39 @@ var _ = Describe("controller", func() {
 			close(done)
 		})
 
-		It("should not error when cache sync time out is of reasonable value", func(done Done) {
-			ctrl.CacheSyncTimeout = 1 * time.Second
+		It("check timeout cases", func(done Done) {
+			var over bool
+
+			// ctrl.CacheSyncTimeout = 10 * time.Nanosecond
 			c, err := cache.New(cfg, cache.Options{})
 			Expect(err).NotTo(HaveOccurred())
+			timeoutCtx, cancel := context.WithTimeout(context.TODO(), 0*time.Second)
+			defer cancel()
+
+			source := source.NewKindWithCache(&appsv1.Deployment{}, c)
+
+			channel := make(chan struct{})
 			ctrl.startWatches = []watchDescription{{
-				src: source.NewKindWithCache(&appsv1.Deployment{}, c),
+				src: NewSignallingSource(channel, source),
 			}}
 
-			By("running the cache and waiting for it to sync")
 			go func() {
 				defer GinkgoRecover()
-				Expect(c.Start(context.TODO())).To(Succeed())
+				Expect(c.Start(timeoutCtx)).NotTo(HaveOccurred())
 			}()
-			close(done)
-		})
 
-		It("should error when timeout is set to a very low value such that cache cannot sync", func(done Done) {
-			ctrl.CacheSyncTimeout = 1 * time.Nanosecond
-			c, err := cache.New(cfg, cache.Options{})
+			err = ctrl.Start(timeoutCtx)
 			Expect(err).NotTo(HaveOccurred())
-			ctrl.startWatches = []watchDescription{{
-				src: source.NewKindWithCache(&appsv1.Deployment{}, c),
-			}}
-
-			By("running the cache and waiting for it to sync")
-			go func() {
-				defer GinkgoRecover()
-				err = ctrl.Start(context.TODO())
-				Expect(err).To(HaveOccurred())
-				Expect(err.Error()).To(ContainSubstring("cache did not sync"))
-			}()
+			select {
+			case <-channel:
+				// if channel is closed then cache is synced
+				over = true
+			case <-timeoutCtx.Done():
+				// timeout
+				over = false
+			}
+			cancel()
+			Expect(over).To(BeTrue())
 			close(done)
 		})
 
